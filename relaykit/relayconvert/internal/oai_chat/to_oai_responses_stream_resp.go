@@ -689,6 +689,12 @@ func (s *ChatToResponsesStreamState) doneDeltaEvents() []ChatToResponsesStreamEv
 				Input:       kitutil.GetPointer(input),
 			}))
 		} else {
+			if tool.Arguments.Len() == 0 {
+				// An argument-less call streams no argument deltas (Claude sends
+				// tool_use input {} without input_json_delta), but Responses
+				// function_call arguments must still be a JSON object.
+				tool.Arguments.WriteString("{}")
+			}
 			argumentsDone := dto.ResponsesStreamResponse{
 				Type:        responsesEventFunctionArgsDone,
 				OutputIndex: intPtr(tool.OutputIndex),

@@ -801,3 +801,35 @@ func TestConvertResponseToResponsesRestoresRecordedCustomTools(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertStreamResponseClaudeToResponsesGivesArgumentlessCallsAnObject(t *testing.T) {
+	// Claude streams a tool_use without input_json_delta when the call has no
+	// arguments; the Responses function_call still needs a JSON object.
+	state, err := NewResponseStreamState(types.RelayFormatClaude, types.RelayFormatOpenAIResponses, ResponseStreamOptions{ID: "resp_1", Model: "model-test"})
+	require.NoError(t, err)
+	var results []ResponseResult
+	for _, chunk := range []any{
+		claudeStreamChunk(`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":4,"output_tokens":0}}}`),
+		claudeStreamChunk(`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_who","name":"whoami","input":{}}}`),
+		claudeStreamChunk(`{"type":"content_block_stop","index":0}`),
+		claudeStreamChunk(`{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}`),
+		claudeStreamChunk(`{"type":"message_stop"}`),
+	} {
+		chunkResults, err := ConvertStreamResponseChunk(nil, &convmeta.Values{}, state, chunk)
+		require.NoError(t, err)
+		results = append(results, chunkResults...)
+	}
+	finals, err := FinalizeStreamResponse(nil, &convmeta.Values{}, state)
+	require.NoError(t, err)
+	results = append(results, finals...)
+
+	var doneArguments []string
+	for _, result := range results {
+		event, ok := result.Value.(ChatToResponsesStreamEvent)
+		require.True(t, ok)
+		if item := event.Payload.Item; event.Type == "response.output_item.done" && item != nil && item.Type == "function_call" {
+			doneArguments = append(doneArguments, string(item.Arguments))
+		}
+	}
+	assert.Equal(t, []string{`"{}"`}, doneArguments)
+}

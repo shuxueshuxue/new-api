@@ -233,13 +233,18 @@ func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID stri
 				Input:  chatArgumentsRawMessage(customToolInputFromArguments(toolCall.Function.Arguments)),
 			}, nil
 		}
+		arguments := toolCall.Function.Arguments
+		if strings.TrimSpace(arguments) == "" {
+			// Responses function_call arguments must be a JSON object.
+			arguments = "{}"
+		}
 		return dto.ResponsesOutput{
 			Type:      responsesOutputTypeFunctionCall,
 			ID:        callID,
 			Status:    status,
 			CallId:    callID,
 			Name:      toolCall.Function.Name,
-			Arguments: chatArgumentsRawMessage(toolCall.Function.Arguments),
+			Arguments: chatArgumentsRawMessage(arguments),
 		}, nil
 	}
 	return dto.ResponsesOutput{
