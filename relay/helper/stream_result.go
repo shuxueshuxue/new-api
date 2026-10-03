@@ -22,6 +22,7 @@ func newStreamResult(status *relaycommon.StreamStatus) *StreamResult {
 // Error records a soft error. The stream continues processing.
 // Can be called multiple times per chunk.
 func (r *StreamResult) Error(err error) {
+	err = withoutNilAPIError(err)
 	if err == nil {
 		return
 	}
@@ -34,9 +35,21 @@ func (r *StreamResult) Error(err error) {
 
 // Stop records a fatal error and marks the stream to stop after this chunk.
 func (r *StreamResult) Stop(err error) {
+	err = withoutNilAPIError(err)
 	r.Error(err)
 	r.status.SetEndReason(relaycommon.StreamEndReasonHandlerStop, err)
 	r.stopped = true
+}
+
+// withoutNilAPIError turns a nil *types.NewAPIError held in an error interface
+// into a nil error. Handlers pass their *NewAPIError variable to Stop even when
+// it is still nil (the failure was already delivered to the client as a
+// protocol-level event); that value is not an error to record.
+func withoutNilAPIError(err error) error {
+	if apiErr, ok := err.(*types.NewAPIError); ok && apiErr == nil {
+		return nil
+	}
+	return err
 }
 
 // Done signals that the handler has finished processing normally

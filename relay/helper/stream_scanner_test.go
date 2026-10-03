@@ -15,6 +15,7 @@ import (
 
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -171,6 +172,27 @@ func TestStreamScannerHandler_StopStopsStream(t *testing.T) {
 	assert.Equal(t, stopAt, count.Load())
 	require.NotNil(t, info.StreamStatus)
 	assert.Equal(t, relaycommon.StreamEndReasonHandlerStop, info.StreamStatus.EndReason)
+}
+
+func TestStreamScannerHandler_StopWithNilAPIErrorStopsCleanly(t *testing.T) {
+	t.Parallel()
+
+	c, resp, info := setupStreamTest(t, strings.NewReader(buildSSEBody(200)))
+
+	var count atomic.Int64
+	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+		count.Add(1)
+		// A handler that already delivered a protocol-level failure event stops
+		// with its still-nil *NewAPIError.
+		var streamErr *types.NewAPIError
+		sr.Stop(streamErr)
+	})
+
+	assert.Equal(t, int64(1), count.Load())
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonHandlerStop, info.StreamStatus.EndReason)
+	assert.Nil(t, info.StreamStatus.EndError)
+	assert.Zero(t, info.StreamStatus.ErrorCount)
 }
 
 func TestStreamScannerHandler_SkipsNonDataLines(t *testing.T) {
