@@ -970,6 +970,34 @@ func TestConvertRequestResponsesToClaudeEncodesToolOutputContentParts(t *testing
 	assert.JSONEq(t, `[{"type":"tool_result","tool_use_id":"call_run","content":[{"type":"text","text":"hi"},{"type":"text","text":"there"}]}]`, string(encoded))
 }
 
+func TestConvertRequestResponsesToClaudeMapsForeignToolCallIDs(t *testing.T) {
+	// A history recorded on Kimi carries call ids such as "bash:1"; Claude accepts only
+	// [A-Za-z0-9_-] in tool_use ids. Ids already in that set pass unchanged.
+	req := customToolHistoryRequest(t,
+		map[string]any{"type": "function_call", "call_id": "bash:1", "name": "run", "arguments": `{}`},
+		map[string]any{"type": "function_call_output", "call_id": "bash:1", "output": "hi"},
+		map[string]any{"type": "function_call", "call_id": "call_ok", "name": "run", "arguments": `{}`},
+		map[string]any{"type": "function_call_output", "call_id": "call_ok", "output": "hi"},
+	)
+	result, err := ConvertRequest(nil, &convmeta.Values{}, types.RelayFormatClaude, req)
+	require.NoError(t, err)
+	claudeReq, ok := result.Value.(*dto.ClaudeRequest)
+	require.True(t, ok)
+	require.Len(t, claudeReq.Messages, 5)
+	blocks := make([]map[string]any, 0, 4)
+	for _, message := range claudeReq.Messages[1:] {
+		var content []map[string]any
+		encoded, err := kitutil.Marshal(message.Content)
+		require.NoError(t, err)
+		require.NoError(t, kitutil.Unmarshal(encoded, &content))
+		blocks = append(blocks, content[0])
+	}
+	assert.Regexp(t, `^bash_1_[0-9a-f]{8}$`, blocks[0]["id"])
+	assert.Equal(t, blocks[0]["id"], blocks[1]["tool_use_id"])
+	assert.Equal(t, "call_ok", blocks[2]["id"])
+	assert.Equal(t, "call_ok", blocks[3]["tool_use_id"])
+}
+
 func mustMarshalRequestJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	raw, err := kitutil.Marshal(value)

@@ -2,6 +2,8 @@ package oairesponses
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -104,7 +106,7 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 			// argument, so its raw input is replayed in that shape.
 			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, dto.ClaudeMediaMessage{
 				Type:  "tool_use",
-				Id:    CallID(item),
+				Id:    claudeToolUseID(CallID(item)),
 				Name:  name,
 				Input: map[string]any{convmeta.CustomToolInputArgument: responsesArgumentsString(item["input"])},
 			})
@@ -218,10 +220,35 @@ func responsesInputContentToClaudeMediaMessages(c context.Context, content any) 
 	return parts, nil
 }
 
+// claudeToolUseID maps a Responses call id into the characters Claude accepts in
+// tool_use ids ([A-Za-z0-9_-]). A conversation that ran on another model can
+// carry ids Claude rejects, such as "bash:1" minted by Kimi; an id already in
+// that set is kept. Otherwise each other character becomes "_" and a short hash
+// of the original is appended, so distinct ids stay distinct and a tool_use and
+// its tool_result, mapped alike, still pair.
+func claudeToolUseID(id string) string {
+	var mapped strings.Builder
+	changed := false
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			mapped.WriteRune(r)
+		default:
+			mapped.WriteByte('_')
+			changed = true
+		}
+	}
+	if !changed {
+		return id
+	}
+	sum := sha256.Sum256([]byte(id))
+	return mapped.String() + "_" + hex.EncodeToString(sum[:4])
+}
+
 func responsesFunctionCallItemToClaudeToolUse(item map[string]any) dto.ClaudeMediaMessage {
 	return dto.ClaudeMediaMessage{
 		Type:  "tool_use",
-		Id:    CallID(item),
+		Id:    claudeToolUseID(CallID(item)),
 		Name:  strings.TrimSpace(kitutil.Interface2String(item["name"])),
 		Input: ObjectValue(item["arguments"], "arguments"),
 	}
@@ -234,7 +261,7 @@ func responsesFunctionCallItemToClaudeToolUse(item map[string]any) dto.ClaudeMed
 func responsesFunctionOutputItemToClaudeToolResult(c context.Context, item map[string]any) (dto.ClaudeMediaMessage, error) {
 	toolResult := dto.ClaudeMediaMessage{
 		Type:      "tool_result",
-		ToolUseId: CallID(item),
+		ToolUseId: claudeToolUseID(CallID(item)),
 		Content:   responsesToolOutputValue(item["output"]),
 	}
 	if parts, ok := item["output"].([]any); ok && len(parts) > 0 {
