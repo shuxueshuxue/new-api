@@ -917,6 +917,24 @@ func TestConvertRequestRecordsResponsesCustomToolsForEachTarget(t *testing.T) {
 	}
 }
 
+func TestConvertRequestResponsesToClaudeEncodesToolOutputContentParts(t *testing.T) {
+	req := customToolHistoryRequest(t,
+		map[string]any{"type": "function_call", "call_id": "call_run", "name": "run", "arguments": `{}`},
+		map[string]any{"type": "function_call_output", "call_id": "call_run", "output": []map[string]any{
+			{"type": "input_text", "text": "hi"},
+			{"type": "output_text", "text": "there"},
+		}},
+	)
+	result, err := ConvertRequest(nil, &convmeta.Values{}, types.RelayFormatClaude, req)
+	require.NoError(t, err)
+	claudeReq, ok := result.Value.(*dto.ClaudeRequest)
+	require.True(t, ok)
+	require.Len(t, claudeReq.Messages, 3)
+	encoded, err := kitutil.Marshal(claudeReq.Messages[2].Content)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[{"type":"tool_result","tool_use_id":"call_run","content":[{"type":"text","text":"hi"},{"type":"text","text":"there"}]}]`, string(encoded))
+}
+
 func mustMarshalRequestJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	raw, err := kitutil.Marshal(value)

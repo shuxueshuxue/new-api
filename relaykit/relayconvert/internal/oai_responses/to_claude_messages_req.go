@@ -109,7 +109,11 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 				Input: map[string]any{convmeta.CustomToolInputArgument: responsesArgumentsString(item["input"])},
 			})
 		case ResponsesInputTypeFunctionCallOutput, ResponsesInputTypeCustomToolOutput:
-			claudeRequest.Messages = appendClaudeToolResult(claudeRequest.Messages, responsesFunctionOutputItemToClaudeToolResult(item))
+			toolResult, err := responsesFunctionOutputItemToClaudeToolResult(c, item)
+			if err != nil {
+				return nil, err
+			}
+			claudeRequest.Messages = appendClaudeToolResult(claudeRequest.Messages, toolResult)
 		default:
 			sourceRole := strings.TrimSpace(kitutil.Interface2String(item["role"]))
 			role := responsesClaudeRole(sourceRole)
@@ -223,12 +227,26 @@ func responsesFunctionCallItemToClaudeToolUse(item map[string]any) dto.ClaudeMed
 	}
 }
 
-func responsesFunctionOutputItemToClaudeToolResult(item map[string]any) dto.ClaudeMediaMessage {
-	return dto.ClaudeMediaMessage{
+// responsesFunctionOutputItemToClaudeToolResult maps a function_call_output or
+// custom_tool_call_output item onto a Claude tool_result. A Responses
+// content-part array (input_text / input_image / ...) is re-encoded as Claude
+// content blocks; Claude rejects the Responses part types inside tool_result.
+func responsesFunctionOutputItemToClaudeToolResult(c context.Context, item map[string]any) (dto.ClaudeMediaMessage, error) {
+	toolResult := dto.ClaudeMediaMessage{
 		Type:      "tool_result",
 		ToolUseId: CallID(item),
 		Content:   responsesToolOutputValue(item["output"]),
 	}
+	if parts, ok := item["output"].([]any); ok && len(parts) > 0 {
+		blocks, err := responsesInputContentToClaudeMediaMessages(c, parts)
+		if err != nil {
+			return toolResult, err
+		}
+		if len(blocks) > 0 {
+			toolResult.Content = blocks
+		}
+	}
+	return toolResult, nil
 }
 
 func responsesToolOutputValue(value any) any {
