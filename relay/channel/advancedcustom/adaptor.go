@@ -109,6 +109,8 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		return a.convertOpenAICompatibleResponsesRequest(c, info, request)
 	case relayconvert.ConverterOpenAIResponsesToOpenAIChat:
 		return a.convertCrossProtocolChatRequest(c, info, converter, request)
+	case relayconvert.ConverterOpenAIResponsesToClaudeMessages:
+		return a.claudeAdaptor.ConvertOpenAIResponsesRequest(c, info, request)
 	case relayconvert.ConverterOpenAIResponsesToGemini:
 		result, err := service.ConvertRequestByID(c, info, converter, request)
 		if err != nil {
@@ -290,7 +292,8 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case relayconvert.ConverterClaudeMessagesToOpenAIChat,
 		relayconvert.ConverterGeminiContentToOpenAIChat:
 		return a.openaiAdaptor.DoResponse(c, resp, info)
-	case relayconvert.ConverterOpenAIChatToClaudeMessages:
+	case relayconvert.ConverterOpenAIChatToClaudeMessages,
+		relayconvert.ConverterOpenAIResponsesToClaudeMessages:
 		return a.claudeAdaptor.DoResponse(c, resp, info)
 	case relayconvert.ConverterOpenAIChatToGeminiContent:
 		return a.geminiAdaptor.DoResponse(c, resp, info)
@@ -484,6 +487,7 @@ func useGeminiStreamGenerateContentURL(parsedURL *url.URL) {
 
 func shouldApplyClaudeHeaders(converter string, info *relaycommon.RelayInfo) bool {
 	return converter == relayconvert.ConverterOpenAIChatToClaudeMessages ||
+		converter == relayconvert.ConverterOpenAIResponsesToClaudeMessages ||
 		(converter == relayconvert.ConverterNone && info != nil && info.RelayFormat == types.RelayFormatClaude)
 }
 

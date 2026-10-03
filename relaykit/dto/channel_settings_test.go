@@ -33,6 +33,17 @@ func TestAdvancedCustomValidateResponsesToChatConverterPath(t *testing.T) {
 	}
 	require.NoError(t, validGemini.Validate())
 
+	validClaude := &AdvancedCustomConfig{
+		Routes: []AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/responses",
+				UpstreamPath: "/v1/messages",
+				Converter:    advancedCustomConverterOpenAIResponsesToClaude,
+			},
+		},
+	}
+	require.NoError(t, validClaude.Validate())
+
 	tests := []struct {
 		name         string
 		incomingPath string
@@ -43,18 +54,20 @@ func TestAdvancedCustomValidateResponsesToChatConverterPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := &AdvancedCustomConfig{
-				Routes: []AdvancedCustomRoute{
-					{
-						IncomingPath: tt.incomingPath,
-						UpstreamPath: "/v1/chat/completions",
-						Converter:    advancedCustomConverterOpenAIResponsesToOpenAIChat,
+			for _, converter := range []string{advancedCustomConverterOpenAIResponsesToOpenAIChat, advancedCustomConverterOpenAIResponsesToClaude} {
+				config := &AdvancedCustomConfig{
+					Routes: []AdvancedCustomRoute{
+						{
+							IncomingPath: tt.incomingPath,
+							UpstreamPath: "/v1/chat/completions",
+							Converter:    converter,
+						},
 					},
-				},
+				}
+				err := config.Validate()
+				require.Error(t, err, converter)
+				assert.Contains(t, err.Error(), "converter does not match incoming_path")
 			}
-			err := config.Validate()
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "converter does not match incoming_path")
 		})
 	}
 }

@@ -736,6 +736,71 @@ func TestAdaptorConvertsOpenAIChatRequestToClaudeUpstream(t *testing.T) {
 	assert.Equal(t, "user", claudeReq.Messages[0].Role)
 }
 
+func TestAdaptorBridgesResponsesRequestToClaudeUpstream(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/responses",
+				UpstreamPath: "/v1/messages",
+				Converter:    relayconvert.ConverterOpenAIResponsesToClaudeMessages,
+				Auth: &dto.AdvancedCustomRouteAuth{
+					Type:  dto.AdvancedCustomAuthTypeHeader,
+					Name:  "x-api-key",
+					Value: "{api_key}",
+				},
+			},
+		},
+	})
+	info.RelayFormat = types.RelayFormatOpenAIResponses
+	info.RelayMode = relayconstant.RelayModeResponses
+	info.RequestURLPath = "/v1/responses"
+	info.OriginModelName = "claude-test"
+	info.UpstreamModelName = "claude-test"
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	converted, err := adaptor.ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{
+		Model: "claude-test",
+		Input: mustAdvancedCustomRawMessage(t, "hello"),
+	})
+	require.NoError(t, err)
+	claudeReq, ok := converted.(*dto.ClaudeRequest)
+	require.True(t, ok)
+	assert.Equal(t, "claude-test", claudeReq.Model)
+	require.Len(t, claudeReq.Messages, 1)
+	assert.Equal(t, "user", claudeReq.Messages[0].Role)
+
+	requestURL, err := adaptor.GetRequestURL(info)
+	require.NoError(t, err)
+	parsedURL, err := url.Parse(requestURL)
+	require.NoError(t, err)
+	assert.Equal(t, "/v1/messages", parsedURL.Path)
+
+	header := http.Header{}
+	require.NoError(t, adaptor.SetupRequestHeader(c, &header, info))
+	assert.Equal(t, "sk-test", header.Get("x-api-key"))
+	assert.Equal(t, "2023-06-01", header.Get("anthropic-version"))
+
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-test",` +
+		`"content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn",` +
+		`"usage":{"input_tokens":2,"output_tokens":3}}`)
+	usage, newAPIError := adaptor.DoResponse(c, &http.Response{
+		Body: io.NopCloser(bytes.NewReader(body)),
+	}, info)
+	require.Nil(t, newAPIError)
+	require.NotNil(t, usage)
+
+	got := recorder.Body.String()
+	assert.Contains(t, got, `"object":"response"`)
+	assert.Contains(t, got, `"type":"output_text"`)
+	assert.Contains(t, got, `"text":"hello"`)
+	assert.NotContains(t, got, `"stop_reason"`)
+}
+
 func TestAdaptorConvertsOpenAIChatRequestToGeminiUpstream(t *testing.T) {
 	adaptor := &Adaptor{}
 	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
