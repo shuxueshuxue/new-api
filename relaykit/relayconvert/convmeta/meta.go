@@ -96,6 +96,27 @@ type ResponsesToolState struct {
 	// upstream as function tools taking one string "input" argument. Function
 	// calls with these names are custom tool calls.
 	CustomToolNames map[string]struct{}
+	// NamespacedTools maps each function name sent upstream for a tool
+	// declared inside a Responses namespace to that namespace and tool name.
+	// Function calls with these names are restored as namespaced calls.
+	NamespacedTools map[string]NamespacedTool
+}
+
+// NamespacedTool identifies a function tool declared inside a Responses
+// namespace tool.
+type NamespacedTool struct {
+	Namespace string
+	Name      string
+}
+
+// LookupNamespacedTool reports the namespace and tool name that the upstream
+// function name was flattened from.
+func (s *ResponsesToolState) LookupNamespacedTool(name string) (NamespacedTool, bool) {
+	if s == nil {
+		return NamespacedTool{}, false
+	}
+	tool, ok := s.NamespacedTools[name]
+	return tool, ok
 }
 
 // CustomToolInputArgument is the single function argument that carries a

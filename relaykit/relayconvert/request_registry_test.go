@@ -917,6 +917,41 @@ func TestConvertRequestRecordsResponsesCustomToolsForEachTarget(t *testing.T) {
 	}
 }
 
+func TestConvertRequestFlattensResponsesNamespaceTools(t *testing.T) {
+	req := &dto.OpenAIResponsesRequest{
+		Model:           "model-test",
+		MaxOutputTokens: lo.ToPtr(uint(64)),
+		Input: mustMarshalRequestJSON(t, []map[string]any{
+			{"role": "user", "content": "say hi"},
+			{"type": "function_call", "call_id": "call_send", "namespace": "mcp__gugu", "name": "message_send", "arguments": `{"text":"hi"}`},
+			{"type": "function_call_output", "call_id": "call_send", "output": "sent"},
+		}),
+		Tools: mustMarshalRequestJSON(t, []map[string]any{{
+			"type": "namespace", "name": "mcp__gugu", "description": "Gugu tools",
+			"tools": []map[string]any{{
+				"type": "function", "name": "message_send", "description": "Send a message",
+				"parameters": map[string]any{"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}},
+			}},
+		}}),
+	}
+	for _, target := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude, types.RelayFormatGemini} {
+		t.Run(string(target), func(t *testing.T) {
+			info := &convmeta.Values{}
+			result, err := ConvertRequest(nil, info, target, req)
+			require.NoError(t, err)
+			encoded, err := kitutil.Marshal(result.Value)
+			require.NoError(t, err)
+			assert.Contains(t, string(encoded), `"mcp__gugu__message_send"`)
+			assert.NotContains(t, string(encoded), `"message_send"`, "declaration and history both use the flattened name")
+			assert.NotContains(t, string(encoded), `"namespace"`)
+			tool, ok := info.ResponsesTools.LookupNamespacedTool("mcp__gugu__message_send")
+			require.True(t, ok)
+			assert.Equal(t, convmeta.NamespacedTool{Namespace: "mcp__gugu", Name: "message_send"}, tool)
+			assert.True(t, hasConversionDiagnosticCode(result.Diagnostics, "namespace_tool_flattened"))
+		})
+	}
+}
+
 func TestConvertRequestResponsesToClaudeEncodesToolOutputContentParts(t *testing.T) {
 	req := customToolHistoryRequest(t,
 		map[string]any{"type": "function_call", "call_id": "call_run", "name": "run", "arguments": `{}`},

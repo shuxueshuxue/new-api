@@ -163,9 +163,49 @@ func extractOpenAIResponsesRequest(request any) (any, Set, error) {
 	if err != nil {
 		return nil, Set{}, err
 	}
-	clone.Input = sanitizedInput
+	clone.Input, err = flattenResponsesNamespacedCalls(sanitizedInput)
+	if err != nil {
+		return nil, Set{}, err
+	}
 	set.History = history
 	return &clone, set, nil
+}
+
+// flattenResponsesNamespacedCalls renames namespaced function calls in the
+// Responses input history to the function names their tools are sent under on
+// protocols without tool namespaces (see FlattenNamespacedToolName), so the
+// history and the tool declarations agree.
+func flattenResponsesNamespacedCalls(input json.RawMessage) (json.RawMessage, error) {
+	if len(input) == 0 || kitutil.GetJsonType(input) != "array" {
+		return input, nil
+	}
+	var items []json.RawMessage
+	if err := kitutil.Unmarshal(input, &items); err != nil {
+		return nil, fmt.Errorf("invalid Responses input: %w", err)
+	}
+	changed := false
+	for index, rawItem := range items {
+		var item map[string]any
+		if err := kitutil.Unmarshal(rawItem, &item); err != nil {
+			return nil, fmt.Errorf("input[%d]: %w", index, err)
+		}
+		namespace := strings.TrimSpace(kitutil.Interface2String(item["namespace"]))
+		if namespace == "" || strings.TrimSpace(kitutil.Interface2String(item["type"])) != "function_call" {
+			continue
+		}
+		item["name"] = FlattenNamespacedToolName(namespace, strings.TrimSpace(kitutil.Interface2String(item["name"])))
+		delete(item, "namespace")
+		encoded, err := kitutil.Marshal(item)
+		if err != nil {
+			return nil, err
+		}
+		items[index] = encoded
+		changed = true
+	}
+	if !changed {
+		return input, nil
+	}
+	return kitutil.Marshal(items)
 }
 
 func extractClaudeRequest(request any) (any, Set, error) {

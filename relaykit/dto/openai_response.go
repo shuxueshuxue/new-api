@@ -374,6 +374,7 @@ type ResponsesOutput struct {
 	Result              string                          `json:"result,omitempty"`
 	CallId              string                          `json:"call_id,omitempty"`
 	Name                string                          `json:"name,omitempty"`
+	Namespace           string                          `json:"namespace,omitempty"`
 	Arguments           json.RawMessage                 `json:"arguments,omitempty"`
 	Input               json.RawMessage                 `json:"input,omitempty"`
 	Action              json.RawMessage                 `json:"action,omitempty"`

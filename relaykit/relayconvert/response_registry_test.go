@@ -802,6 +802,97 @@ func TestConvertResponseToResponsesRestoresRecordedCustomTools(t *testing.T) {
 	}
 }
 
+func TestConvertResponseToResponsesRestoresNamespacedTools(t *testing.T) {
+	info := &convmeta.Values{ResponsesTools: &convmeta.ResponsesToolState{NamespacedTools: map[string]convmeta.NamespacedTool{
+		"mcp__gugu__message_send": {Namespace: "mcp__gugu", Name: "message_send"},
+	}}}
+	chatMessage := dto.Message{Role: "assistant"}
+	chatMessage.SetToolCalls([]dto.ToolCallRequest{{ID: "call_send", Type: "function", Function: dto.FunctionRequest{Name: "mcp__gugu__message_send", Arguments: `{"text":"hi"}`}}})
+	geminiSendCall := `{"candidates":[{"finishReason":"STOP","content":{"role":"model","parts":[{"functionCall":{"name":"mcp__gugu__message_send","args":{"text":"hi"}}}]}}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2,"totalTokenCount":6}}`
+	tests := []struct {
+		name     string
+		from     types.RelayFormat
+		response any
+		stream   []any
+	}{
+		{
+			name: "chat",
+			from: types.RelayFormatOpenAI,
+			response: &dto.OpenAITextResponse{
+				Id:      "chatcmpl_1",
+				Model:   "gpt-test",
+				Choices: []dto.OpenAITextResponseChoice{{Message: chatMessage, FinishReason: "tool_calls"}},
+			},
+			stream: []any{
+				chatStreamChunk(`{"id":"chatcmpl_1","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_send","type":"function","function":{"name":"mcp__gugu__message_send","arguments":"{\"text\":\"hi\"}"}}]},"finish_reason":"tool_calls"}]}`),
+			},
+		},
+		{
+			name: "claude",
+			from: types.RelayFormatClaude,
+			response: &dto.ClaudeResponse{
+				Id:         "msg_1",
+				Type:       "message",
+				Role:       "assistant",
+				Model:      "claude-test",
+				StopReason: "tool_use",
+				Content:    []dto.ClaudeMediaMessage{{Type: "tool_use", Id: "toolu_send", Name: "mcp__gugu__message_send", Input: map[string]any{"text": "hi"}}},
+			},
+			stream: []any{
+				claudeStreamChunk(`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":4,"output_tokens":0}}}`),
+				claudeStreamChunk(`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_send","name":"mcp__gugu__message_send","input":{}}}`),
+				claudeStreamChunk(`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"text\":\"hi\"}"}}`),
+				claudeStreamChunk(`{"type":"content_block_stop","index":0}`),
+				claudeStreamChunk(`{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}`),
+				claudeStreamChunk(`{"type":"message_stop"}`),
+			},
+		},
+		{
+			name:     "gemini",
+			from:     types.RelayFormatGemini,
+			response: geminiStreamChunk(geminiSendCall),
+			stream:   []any{geminiStreamChunk(geminiSendCall)},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ConvertResponse(nil, info, types.RelayFormatOpenAIResponses, tt.response)
+			require.NoError(t, err)
+			responses, ok := result.Value.(*dto.OpenAIResponsesResponse)
+			require.True(t, ok)
+			require.Len(t, responses.Output, 1)
+			assert.Equal(t, "function_call", responses.Output[0].Type)
+			assert.Equal(t, "mcp__gugu", responses.Output[0].Namespace)
+			assert.Equal(t, "message_send", responses.Output[0].Name)
+
+			state, err := NewResponseStreamState(tt.from, types.RelayFormatOpenAIResponses, ResponseStreamOptions{ID: "resp_1", Model: "model-test"})
+			require.NoError(t, err)
+			var results []ResponseResult
+			for _, chunk := range tt.stream {
+				chunkResults, err := ConvertStreamResponseChunk(nil, info, state, chunk)
+				require.NoError(t, err)
+				results = append(results, chunkResults...)
+			}
+			finals, err := FinalizeStreamResponse(nil, info, state)
+			require.NoError(t, err)
+			results = append(results, finals...)
+
+			var toolItems []string
+			for _, result := range results {
+				event, ok := result.Value.(ChatToResponsesStreamEvent)
+				require.True(t, ok)
+				if item := event.Payload.Item; item != nil && item.Type == "function_call" {
+					toolItems = append(toolItems, event.Type+" "+item.Namespace+" "+item.Name)
+				}
+			}
+			assert.Equal(t, []string{
+				"response.output_item.added mcp__gugu message_send",
+				"response.output_item.done mcp__gugu message_send",
+			}, toolItems)
+		})
+	}
+}
+
 func TestConvertStreamResponseClaudeToResponsesGivesArgumentlessCallsAnObject(t *testing.T) {
 	// Claude streams a tool_use without input_json_delta when the call has no
 	// arguments; the Responses function_call still needs a JSON object.

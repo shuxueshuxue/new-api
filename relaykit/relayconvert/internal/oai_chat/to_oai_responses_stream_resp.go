@@ -586,6 +586,9 @@ func (s *ChatToResponsesStreamState) announceTool(tool *chatToResponsesStreamToo
 		item.Type = responsesOutputTypeCustomToolCall
 		item.Arguments = nil
 		item.Input = []byte(`""`)
+	} else if namespaced, ok := s.Tools.LookupNamespacedTool(tool.Name); ok {
+		item.Namespace = namespaced.Namespace
+		item.Name = namespaced.Name
 	}
 	return s.event(responsesEventOutputItemAdded, dto.ResponsesStreamResponse{
 		Type:        responsesEventOutputItemAdded,
@@ -896,7 +899,7 @@ func (s *ChatToResponsesStreamState) toolOutput(tool *chatToResponsesStreamTool,
 			Input:  chatArgumentsRawMessage(customToolInputFromArguments(tool.Arguments.String())),
 		}
 	}
-	return &dto.ResponsesOutput{
+	output := &dto.ResponsesOutput{
 		Type:      responsesOutputTypeFunctionCall,
 		ID:        tool.ItemID,
 		Status:    status,
@@ -904,6 +907,11 @@ func (s *ChatToResponsesStreamState) toolOutput(tool *chatToResponsesStreamTool,
 		Name:      tool.Name,
 		Arguments: chatArgumentsRawMessage(tool.Arguments.String()),
 	}
+	if namespaced, ok := s.Tools.LookupNamespacedTool(tool.Name); ok {
+		output.Namespace = namespaced.Namespace
+		output.Name = namespaced.Name
+	}
+	return output
 }
 
 func (t *chatToResponsesStreamTool) callID() string {

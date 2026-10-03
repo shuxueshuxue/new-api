@@ -1,8 +1,11 @@
 package toolconv
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -17,6 +20,7 @@ func AttachRequest(format types.RelayFormat, request any, set Set, options *conv
 	if set.Empty() {
 		return request, nil, nil
 	}
+	set, _, namespaceDiagnostics := expandResponsesNamespaceTools(set)
 	var (
 		value       any
 		diagnostics []types.ConversionDiagnostic
@@ -34,6 +38,7 @@ func AttachRequest(format types.RelayFormat, request any, set Set, options *conv
 	default:
 		value = request
 	}
+	diagnostics = append(namespaceDiagnostics, diagnostics...)
 	if err != nil {
 		return nil, diagnostics, err
 	}
@@ -260,6 +265,128 @@ func responsesCustomToolChoice(choice *Choice, customTools map[int]*responsesCus
 		}
 	}
 	return choice
+}
+
+const responsesNamespaceToolType = "namespace"
+
+// maxUpstreamToolNameLength is the longest function name accepted by every
+// protocol a Responses namespace is flattened for (OpenAI Chat Completions,
+// Claude Messages and Gemini).
+const maxUpstreamToolNameLength = 64
+
+// expandResponsesNamespaceTools replaces each Responses namespace tool with the
+// function tools it declares, renamed with FlattenNamespacedToolName, because
+// the target protocols have no tool namespaces. It also returns, by flattened
+// name, the namespace and tool name each function came from. Request encoding
+// and ResponsesNamespacedTools share this expansion so restored calls always
+// match the functions that were sent.
+func expandResponsesNamespaceTools(set Set) (Set, map[string]convmeta.NamespacedTool, []types.ConversionDiagnostic) {
+	if set.Source != types.RelayFormatOpenAIResponses || !slices.ContainsFunc(set.Definitions, isResponsesNamespaceDefinition) {
+		return set, nil, nil
+	}
+	usedNames := make(map[string]struct{})
+	for _, definition := range set.Definitions {
+		switch {
+		case definition.Kind == KindFunction && definition.Function != nil:
+			usedNames[definition.Function.Name] = struct{}{}
+		case definition.Kind == KindNative && definition.NativeType == responsesCustomToolType:
+			if tool := decodeResponsesCustomTool(definition.Raw); tool != nil {
+				usedNames[tool.name] = struct{}{}
+			}
+		}
+	}
+
+	var (
+		namespaced  map[string]convmeta.NamespacedTool
+		diagnostics []types.ConversionDiagnostic
+	)
+	expanded := make([]Definition, 0, len(set.Definitions))
+	for index, definition := range set.Definitions {
+		if !isResponsesNamespaceDefinition(definition) {
+			expanded = append(expanded, definition)
+			continue
+		}
+		path := fmt.Sprintf("tools[%d]", index)
+		var value map[string]any
+		if err := kitutil.Unmarshal(definition.Raw, &value); err != nil {
+			diagnostics = append(diagnostics, semanticLoss(path, "unsupported_hosted_tool", "namespace tool is not a JSON object"))
+			continue
+		}
+		namespace := strings.TrimSpace(kitutil.Interface2String(value["name"]))
+		children, _ := value["tools"].([]any)
+		for childIndex, rawChild := range children {
+			child, _ := rawChild.(map[string]any)
+			childPath := fmt.Sprintf("%s.tools[%d]", path, childIndex)
+			childName := strings.TrimSpace(kitutil.Interface2String(child["name"]))
+			if namespace == "" || childName == "" || strings.TrimSpace(kitutil.Interface2String(child["type"])) != "function" {
+				diagnostics = append(diagnostics, semanticLoss(childPath, "unsupported_hosted_tool",
+					fmt.Sprintf("namespace %q tool %q is not a named function tool, so the target protocol cannot represent it", namespace, childName)))
+				continue
+			}
+			name := FlattenNamespacedToolName(namespace, childName)
+			if _, exists := usedNames[name]; exists {
+				diagnostics = append(diagnostics, semanticLoss(childPath, "namespace_tool_name_conflict",
+					fmt.Sprintf("namespace %q tool %q flattens to %q, which another tool already uses", namespace, childName, name)))
+				continue
+			}
+			usedNames[name] = struct{}{}
+			if namespaced == nil {
+				namespaced = make(map[string]convmeta.NamespacedTool)
+			}
+			namespaced[name] = convmeta.NamespacedTool{Namespace: namespace, Name: childName}
+			expanded = append(expanded, Definition{
+				Kind:      KindFunction,
+				Execution: ExecutionClient,
+				Name:      name,
+				Function: &Function{
+					Name:        name,
+					Description: kitutil.Interface2String(child["description"]),
+					Parameters:  child["parameters"],
+					Strict:      boolPointer(child, "strict"),
+				},
+			})
+		}
+		diagnostics = append(diagnostics, presentationLoss(path, "namespace_tool_flattened",
+			fmt.Sprintf("the target protocol has no tool namespaces; tools in namespace %q are sent as functions named %s__<tool>", namespace, strings.TrimRight(namespace, "_"))))
+	}
+	set.Definitions = expanded
+	return set, namespaced, diagnostics
+}
+
+func isResponsesNamespaceDefinition(definition Definition) bool {
+	return definition.Kind == KindNative && definition.NativeType == responsesNamespaceToolType
+}
+
+// ResponsesNamespacedTools returns, by upstream function name, the namespace
+// and tool name of every Responses namespaced function that AttachRequest
+// sends upstream. The response side restores calls of these functions as
+// namespaced function calls.
+func ResponsesNamespacedTools(set Set) map[string]convmeta.NamespacedTool {
+	_, namespaced, _ := expandResponsesNamespaceTools(set)
+	return namespaced
+}
+
+// FlattenNamespacedToolName is the function name a tool declared inside a
+// Responses namespace gets on protocols without tool namespaces:
+// <namespace>__<name>, limited to [A-Za-z0-9_-] and 64 characters. A longer
+// name keeps a prefix and ends with a hash of the namespace and tool name, so
+// distinct tools stay distinct.
+func FlattenNamespacedToolName(namespace string, name string) string {
+	var flat strings.Builder
+	for _, r := range strings.TrimRight(namespace, "_") + "__" + strings.TrimLeft(name, "_") {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			flat.WriteRune(r)
+		default:
+			flat.WriteByte('_')
+		}
+	}
+	if flat.Len() <= maxUpstreamToolNameLength {
+		return flat.String()
+	}
+	sum := sha256.Sum256([]byte(namespace + "\x00" + name))
+	suffix := hex.EncodeToString(sum[:4])
+	return flat.String()[:maxUpstreamToolNameLength-len(suffix)-1] + "_" + suffix
 }
 
 func attachOpenAIResponsesRequest(request any, set Set) (any, []types.ConversionDiagnostic, error) {

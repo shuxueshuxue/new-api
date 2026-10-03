@@ -238,14 +238,19 @@ func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID stri
 			// Responses function_call arguments must be a JSON object.
 			arguments = "{}"
 		}
-		return dto.ResponsesOutput{
+		output := dto.ResponsesOutput{
 			Type:      responsesOutputTypeFunctionCall,
 			ID:        callID,
 			Status:    status,
 			CallId:    callID,
 			Name:      toolCall.Function.Name,
 			Arguments: chatArgumentsRawMessage(arguments),
-		}, nil
+		}
+		if namespaced, ok := tools.LookupNamespacedTool(toolCall.Function.Name); ok {
+			output.Namespace = namespaced.Namespace
+			output.Name = namespaced.Name
+		}
+		return output, nil
 	}
 	return dto.ResponsesOutput{
 		Type:      toolCall.Type,

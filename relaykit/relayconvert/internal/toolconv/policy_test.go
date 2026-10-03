@@ -279,3 +279,14 @@ func TestResponsesCustomToolNameConflictIsDropped(t *testing.T) {
 		})
 	}
 }
+
+func TestFlattenNamespacedToolName(t *testing.T) {
+	assert.Equal(t, "mcp__gugu__message_send", FlattenNamespacedToolName("mcp__gugu", "message_send"))
+	assert.Equal(t, "mcp__docs__search_v2", FlattenNamespacedToolName("mcp__docs", "search.v2"), "characters outside [A-Za-z0-9_-] become underscores")
+
+	long := FlattenNamespacedToolName("mcp__a_very_long_server_name_for_testing", "a_very_long_tool_name_that_overflows_one")
+	other := FlattenNamespacedToolName("mcp__a_very_long_server_name_for_testing", "a_very_long_tool_name_that_overflows_two")
+	assert.Len(t, long, maxUpstreamToolNameLength)
+	assert.Len(t, other, maxUpstreamToolNameLength)
+	assert.NotEqual(t, long, other, "names that share the truncated prefix stay distinct")
+}
