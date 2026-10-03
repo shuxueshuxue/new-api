@@ -263,6 +263,18 @@ func TestResponsesRequestToChatCompletionsRequestEncodesCustomToolHistoryAsFunct
 	assert.Equal(t, dto.Message{Role: "tool", ToolCallId: "call_custom", Content: "hi"}, got.Messages[1])
 }
 
+func TestResponsesRequestToChatCompletionsRequestSendsDeveloperMessagesAsSystem(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(context.Background(), &dto.OpenAIResponsesRequest{
+		Model: "kimi-test",
+		Input: mustRawMessage(t, []map[string]any{
+			{"type": "message", "role": "developer", "content": "house rules"},
+			{"type": "message", "role": "user", "content": "hello"},
+		}),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []dto.Message{{Role: "system", Content: "house rules"}, {Role: "user", Content: "hello"}}, got.Messages)
+}
+
 func TestResponsesRequestToChatCompletionsRequestRejectsNamelessCustomToolCall(t *testing.T) {
 	_, err := ResponsesRequestToChatCompletionsRequest(context.Background(), &dto.OpenAIResponsesRequest{
 		Model: "gpt-test",

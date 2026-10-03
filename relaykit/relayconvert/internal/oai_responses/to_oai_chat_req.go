@@ -221,8 +221,14 @@ func responsesInputItemToChatMessages(item map[string]any, messages []dto.Messag
 	}
 
 	role := strings.TrimSpace(kitutil.Interface2String(item["role"]))
-	if role == "" {
+	switch role {
+	case "":
 		role = "user"
+	case "developer":
+		// Chat's portable system role, the one instructions already use (and the one the
+		// Claude and Gemini conversions read developer as): Chat upstreams outside OpenAI
+		// reject "developer".
+		role = "system"
 	}
 	content, err := responsesInputContentToChatContent(item["content"])
 	if err != nil {
