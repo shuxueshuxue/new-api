@@ -953,6 +953,21 @@ func TestConvertRequestFlattensResponsesNamespaceTools(t *testing.T) {
 	}
 }
 
+func TestConvertRequestResponsesToClaudeSendsStrictOnlyWhenTrue(t *testing.T) {
+	req := customToolHistoryRequest(t)
+	req.Tools = mustRawMessage(t, []map[string]any{
+		{"type": "function", "name": "loose", "parameters": map[string]any{"type": "object"}, "strict": false},
+		{"type": "function", "name": "exact", "parameters": map[string]any{"type": "object"}, "strict": true},
+	})
+	result, err := ConvertRequest(nil, &convmeta.Values{}, types.RelayFormatClaude, req)
+	require.NoError(t, err)
+	claudeReq, ok := result.Value.(*dto.ClaudeRequest)
+	require.True(t, ok)
+	encoded, err := kitutil.Marshal(claudeReq.Tools)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[{"name":"loose","input_schema":{"type":"object","properties":{}}},{"name":"exact","input_schema":{"type":"object","properties":{}},"strict":true}]`, string(encoded))
+}
+
 func TestConvertRequestResponsesToClaudeEncodesToolOutputContentParts(t *testing.T) {
 	req := customToolHistoryRequest(t,
 		map[string]any{"type": "function_call", "call_id": "call_run", "name": "run", "arguments": `{}`},

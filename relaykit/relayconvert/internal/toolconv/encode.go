@@ -507,11 +507,17 @@ func attachClaudeRequest(request any, set Set, options *convmeta.Options) (any, 
 			if err != nil {
 				return nil, diagnostics, fmt.Errorf("tools[%d].input_schema: %w", index, err)
 			}
+			// strict:false is Claude's default. Claude on Bedrock rejects the field outright
+			// ("strict: Extra inputs are not permitted"), so only a true value is carried over.
+			var strict *bool
+			if definition.Function.Strict != nil && *definition.Function.Strict {
+				strict = definition.Function.Strict
+			}
 			tools = append(tools, &dto.Tool{
 				Name:        definition.Function.Name,
 				Description: definition.Function.Description,
 				InputSchema: inputSchema,
-				Strict:      definition.Function.Strict,
+				Strict:      strict,
 			})
 		case KindWebSearch:
 			if set.Source == types.RelayFormatGemini {
