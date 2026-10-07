@@ -2,6 +2,7 @@ package dto
 
 import (
 	"encoding/json"
+	"strings"
 
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -47,6 +48,37 @@ func (e GeneralErrorResponse) TryToOpenAIError() *types.OpenAIError {
 		}
 	}
 	return nil
+}
+
+// HapiUpstreamRejection reads the error that hapi, an upstream relay, wraps around a rejection from its
+// own upstream: error type "hapi_upstream_error" with the message "HAPI upstream error: <status> <body>".
+// hapi sends it as HTTP 500, or, on a streamed request, as an `error` event inside an HTTP 200 stream; the
+// caller passes the error's type and message from whichever of the two it read. When the wrapped status is
+// 400 the request itself was rejected, and it returns that error, so the client is told so instead of being
+// told to retry a server error. Every other wrapped status stays hapi's server error: a wrapped 401, 403 or
+// 429 is about hapi's own upstream account, not the client's key, and a wrapped 5xx is an upstream outage.
+// A wrapped body that is not an error object also returns nil.
+func HapiUpstreamRejection(errorType, message string) *types.OpenAIError {
+	if errorType != "hapi_upstream_error" {
+		return nil
+	}
+	body, ok := strings.CutPrefix(message, "HAPI upstream error: 400 ")
+	if !ok {
+		return nil
+	}
+	var inner GeneralErrorResponse
+	if kitutil.Unmarshal([]byte(body), &inner) != nil {
+		return nil
+	}
+	innerError := inner.TryToOpenAIError()
+	if innerError == nil {
+		return nil
+	}
+	// Anthropic-shaped errors carry no code; a Claude client reads the code as the error type.
+	if innerError.Code == nil {
+		innerError.Code = innerError.Type
+	}
+	return innerError
 }
 
 func (e GeneralErrorResponse) ToMessage() string {

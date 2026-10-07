@@ -1,15 +1,20 @@
 package claude
 
 import (
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -399,4 +404,45 @@ func TestOpenAIChatRequestToClaudeMessages_ClaudeOpus48ThinkingUsesAdaptiveHighE
 	require.Nil(t, claudeRequest.Temperature)
 	require.Nil(t, claudeRequest.TopP)
 	require.Nil(t, claudeRequest.TopK)
+}
+
+func TestClaudeStreamHandlerReturnsHapiWrappedRejectionAs400(t *testing.T) {
+	// On a streamed request hapi refuses with HTTP 200 and a single `error` event; framing, spacing and the
+	// wrapped sonnet-5 refusal are copied from captured hapi responses.
+	hapiRejection := `{"type": "error", "error": {"type": "hapi_upstream_error", "param": null, "code": "hapi_upstream_error", "message": "HAPI upstream error: 400 {\"error\":{\"message\":\"role 'system' is not supported on this model.\",\"type\":\"InvalidParameter\",\"code\":\"InvalidParameter\"},\"trace_id\":\"c0d2e7b151189ceeee34d9c2e32a15a5\",\"request_id\":\"3bcd4325-a2e8-4b3d-a3c1-c50141d72542\"}"}}`
+	overloaded := `{"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}`
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 300
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldStreamingTimeout
+	})
+	for _, tc := range []struct {
+		name        string
+		event       string
+		wantStatus  int
+		wantType    string
+		wantMessage string
+	}{
+		{"hapi rejection event", hapiRejection, http.StatusBadRequest, "InvalidParameter", "role 'system' is not supported on this model."},
+		{"other error event stays a server error", overloaded, http.StatusInternalServerError, "overloaded_error", "Overloaded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			info := &relaycommon.RelayInfo{
+				RelayFormat: types.RelayFormatClaude, IsStream: true, DisablePing: true, StartTime: time.Now(),
+				ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-sonnet-5"},
+			}
+			body := "event: error\ndata: " + tc.event + "\n\n"
+			resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
+
+			_, apiErr := ClaudeStreamHandler(c, resp, info)
+
+			require.NotNil(t, apiErr)
+			assert.Equal(t, tc.wantStatus, apiErr.StatusCode)
+			claudeError := apiErr.ToClaudeError()
+			assert.Equal(t, tc.wantType, claudeError.Type)
+			assert.Equal(t, tc.wantMessage, claudeError.Message)
+		})
+	}
 }

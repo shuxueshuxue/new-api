@@ -117,6 +117,11 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		// General format error (OpenAI, Anthropic, Gemini, etc.)
 		oaiError := errResponse.TryToOpenAIError()
 		if oaiError != nil {
+			if resp.StatusCode >= http.StatusInternalServerError {
+				if restored := UnwrapHapiUpstreamRejection(ctx, resp.StatusCode, oaiError.Type, oaiError.Message); restored != nil {
+					return restored
+				}
+			}
 			newApiErr = types.WithOpenAIError(*oaiError, resp.StatusCode)
 			if showBodyWhenFail {
 				newApiErr.Err = buildErrWithBody(newApiErr.Error())
@@ -135,6 +140,19 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		newApiErr.Err = buildErrWithBody(newApiErr.Error())
 	}
 	return
+}
+
+// UnwrapHapiUpstreamRejection returns the 400 that hapi wrapped as a server error (see
+// dto.HapiUpstreamRejection), or nil when the error is anything else. Callers pass the HTTP status and the
+// error they read: an HTTP 500 body in RelayErrorHandler, or, in the Claude stream handler, an `error`
+// event inside an HTTP 200 stream, which is how hapi reports it on streamed requests.
+func UnwrapHapiUpstreamRejection(ctx context.Context, upstreamStatus int, errorType, message string) *types.NewAPIError {
+	rejection := dto.HapiUpstreamRejection(errorType, message)
+	if rejection == nil {
+		return nil
+	}
+	logger.LogInfo(ctx, fmt.Sprintf("hapi upstream rejection unwrapped: status %d -> 400, error: %s", upstreamStatus, common.LocalLogPreview(message)))
+	return types.WithOpenAIError(*rejection, http.StatusBadRequest)
 }
 
 func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) {

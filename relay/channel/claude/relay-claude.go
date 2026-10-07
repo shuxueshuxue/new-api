@@ -93,6 +93,9 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		return types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
+		if restored := service.UnwrapHapiUpstreamRejection(c, http.StatusOK, claudeError.Type, claudeError.Message); restored != nil {
+			return restored
+		}
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
 	}
 	if claudeResponse.Type == "message_start" && claudeResponse.Message != nil {
